@@ -1,18 +1,43 @@
 echo "[4] Веб-сервер"
 
-# б) конфигурация nginx синтаксически корректна
+AUDIT_FAILED=0
+
+check() {
+    local desc="$1"; shift
+    if "$@" >/dev/null 2>&1; then
+        printf '  [ OK ] %s\n' "$desc"
+    else
+        printf '  [FAIL] %s\n' "$desc" >&2
+        AUDIT_FAILED=1
+    fi
+}
+
+
 check "nginx: конфигурация синтаксически корректна" \
     sudo nginx -t
 
-# в) сертификат истекает не ранее чем через 30 дней
 check "nginx: сертификат действителен не менее 30 дней" \
     openssl x509 -checkend $((30*24*3600)) -noout \
     -in /etc/ssl/certs/devops.crt
 
-# г1) в каталоге ресурса нет файлов, доступных для записи всем
 check "nginx: нет файлов с правом записи для всех" \
     test -z "$(find /var/www/devops-site -perm -o+w -print -quit)"
 
-# г2) права закрытого ключа равны 600
 check "nginx: права ключа равны 600" \
     test "$(sudo stat -c '%a' /etc/ssl/private/devops.key)" = "600"
+
+echo "[5] Контейнеризация"
+
+check "docker: служба активна" \
+    test "$(systemctl is-active docker)" = "active"
+
+check "docker: контейнер СУБД healthy" \
+    test "$(docker inspect -f '{{.State.Health.Status}}' app-db-1 2>/dev/null)" = "healthy"
+
+check "docker: порты 5000/5432 только на 127.0.0.1" \
+    test -z "$(ss -tln | awk 'NR>1 && ($4 ~ /:5000$/ || $4 ~ /:5432$/) && $4 !~ /^127\.0\.0\.1:/')"
+
+check "docker: права .env равны 600" \
+    test "$(stat -c '%a' "${HOME}/app/.env" 2>/dev/null)" = "600"
+
+exit "${AUDIT_FAILED}"
